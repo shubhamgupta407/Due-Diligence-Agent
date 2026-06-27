@@ -43,51 +43,53 @@ The product also includes a full platform around the agent — a dashboard with 
 
 ## How it works — approach and architecture
 
-The agent is orchestrated with **LangGraph.js** as a state graph with three nodes sharing a single `AgentState` object:
+The agent is orchestrated with **LangGraph.js** as a state graph with three nodes sharing a single `AgentState` object, and every step in this pipeline makes a real, live call — there's no mocked data or simulated delay anywhere in it.
 
-**1. Research Node** — Runs four parallel calls to the Tavily Search API for a given company: business overview, recent news, competitor landscape, and risk factors (lawsuits, leadership changes, financial red flags). This is the only node that touches the live web.
+**1. Research Node** (`src/lib/agent/nodes/research.ts`) — Makes four simultaneous, real HTTP requests to the Tavily API (via `Promise.all`) for a given company: business overview, recent news, competitor landscape, and risk factors. This genuinely scrapes the live web every time — there's no fallback or cached text if Tavily is unavailable.
 
-**2. RAG Node** — This exists because the raw output from four separate searches is too long and too noisy to hand directly to an LLM — you'd hit token limits and dilute the signal with irrelevant text. So each category's raw text is chunked using LangChain.js's `RecursiveCharacterTextSplitter` (~250 words per chunk), embedded locally using **Xenova Transformers.js** (`all-MiniLM-L6-v2` — the same model family as `sentence-transformers`, just running in JS instead of Python), and stored in an in-memory vector store. The top 3-5 most relevant chunks per category are retrieved using a query targeted at investment-relevant signals, and that's what actually reaches the LLM.
+**2. RAG Node** (`src/lib/agent/nodes/rag.ts`) — This exists because the raw output from four separate searches is too long and too noisy to hand directly to an LLM — you'd hit token limits and dilute the signal with irrelevant text. Each category's raw text is chunked using LangChain.js's `RecursiveCharacterTextSplitter` (~250 words per chunk), then embedded **locally** using **Xenova Transformers.js** (`all-MiniLM-L6-v2`, the same model family as Python's `sentence-transformers`, running directly in Node). Cosine similarity is computed against the retrieval query to pull the top relevant chunks per category — all of this runs at request time, nothing is pre-computed.
 
-**3. Decision Node** — Takes the condensed, RAG-filtered evidence across all four categories and prompts Groq (Llama 3.3 70B) to produce a structured decision: Invest or Pass, reasoning, a list of supporting points, and a list of risk factors — all in strict JSON, with temperature set to 0.
+**3. Decision Node** (`src/lib/agent/nodes/decision.ts`) — Takes the condensed, RAG-filtered evidence across all four categories and makes a live call to Groq (`llama-3.3-70b-versatile`), using LangChain's `withStructuredOutput` to force a strict JSON response: decision (Invest/Pass), reasoning, supporting points, and risk factors — all grounded only in the retrieved context, not the model's general knowledge.
 
-There's also a lightweight pre-flight check before any of this runs: a fast, low-temperature Groq call checks whether the input is actually a plausible company name before it reaches Tavily. If you type random characters, it's rejected immediately with a clear error instead of producing a hallucinated result for a company that doesn't exist.
+There's also a lightweight pre-flight check before any of this runs: a fast, low-temperature Groq call checks whether the input is actually a plausible company name before it reaches Tavily. Type random characters, and it's rejected immediately with a clear error instead of letting noisy search results produce a hallucinated decision for a company that doesn't exist.
 
-**Frontend:** Next.js (App Router) for both the UI and the API routes, TypeScript throughout, Tailwind CSS for styling. The backend streams the actual LangGraph node execution to the frontend via Server-Sent Events, so the UI shows real progress (which node is currently running) rather than a generic spinner.
+**Streaming:** The API route (`src/app/api/research/route.ts`) doesn't block until the whole graph finishes — it awaits `agentApp.stream()` and pushes each node's completion to the frontend over Server-Sent Events as it actually happens. The loading state on the frontend reflects real network I/O time waiting on Tavily and Groq, not a simulated delay.
+
+**Frontend:** Next.js (App Router) for both the UI and the API routes, TypeScript throughout, Tailwind CSS for styling.
 
 ## Key decisions & trade-offs
 
-- **Xenova Transformers.js over OpenAI embeddings** — Needed local, free embeddings rather than an external API call for every chunk. `all-MiniLM-L6-v2` via Xenova runs entirely in Node, no extra API cost or latency, and is the same model family I'd used with `sentence-transformers` in a previous Python project.
+- **Xenova Transformers.js over OpenAI embeddings** — Needed local, free embeddings rather than an external API call for every chunk. `all-MiniLM-L6-v2` via Xenova runs entirely in Node, no extra API cost or added network latency, and is the same model family I'd used with `sentence-transformers` in a previous Python project.
 
-- **Groq over OpenAI for synthesis** — Groq's inference speed meant the decision step added only a couple of seconds on top of the search latency, which matters a lot when the user is already waiting through four web searches plus embedding/retrieval. The trade-off is somewhat less polished reasoning than GPT-4-class models, partially offset by moving to the 70B model after the 8B model was inconsistent with strict JSON output (see below).
+- **Groq over OpenAI for synthesis** — Groq's inference speed meant the decision step added only a couple of seconds on top of the search and embedding latency, which matters when the user is already waiting through four web searches. The trade-off is somewhat less polished reasoning compared to GPT-4-class models, partially offset by moving from the 8B to the 70B model after the smaller model was inconsistent with strict JSON output (see below).
 
-- **`jsonMode` over tool-calling for structured output** — Initially used Groq's native tool-calling to force structured JSON output, but it intermittently broke on certain companies (Groq's tool-calling endpoint would inject a `<function=extract>` prefix that broke JSON parsing). Switched to `jsonMode` with the schema hardcoded into the system prompt directly, which has been reliable across every company tested.
+- **`jsonMode` over native tool-calling for structured output** — Initially used Groq's tool-calling to force structured JSON, but it intermittently broke on certain companies — Groq's tool-calling endpoint would inject a `<function=extract>` prefix that broke JSON parsing downstream. Switched to `jsonMode` with the schema hardcoded directly into the system prompt, which has been reliable across every company tested since.
 
-- **In-memory vector store, not a persistent vector DB** — Each research session is self-contained; there's no need to persist embeddings across users or sessions for this use case, so a persistent vector database (Pinecone, Weaviate) would be unnecessary infrastructure for what this actually needs to do.
+- **In-memory vector store, not a persistent vector DB** — Each research session is self-contained; there's no need to persist embeddings across users or sessions for this use case, so a persistent vector database (Pinecone, Weaviate) would be unnecessary infrastructure overhead here.
 
-- **A pre-flight validity check before the main pipeline** — Without this, a nonsense input would still produce a confident-sounding Invest/Pass decision based on whatever noise Tavily returned. A small, fast classification call up front (rather than trying to catch this after the fact) prevented this cleanly.
+- **A pre-flight validity check before the main pipeline runs** — Without this, a nonsense input would still produce a confident-sounding Invest/Pass decision based on whatever noise Tavily happened to return for it. Catching this with a small, fast classification call up front was simpler and more reliable than trying to detect a bad result after the fact.
 
-- **What I left out:** There's no persistent storage of past research sessions across browser sessions (Saved Reports / Recent Activity currently use `localStorage`, not a database) — this was a deliberate scope cut given the 7-day window, not an oversight.
+- **What I left out:** There's no persistent database for past research sessions — Saved Reports and Recent Activity currently use the browser's `localStorage`, so history doesn't carry across devices or browser sessions. This was a deliberate scope cut for the time available, not an oversight; the report *content* saved there is the real, unmodified output the live pipeline generated.
 
 ## Example runs
 
 **Qualcomm — Invest (94.2% confidence)**
-The agent identified Qualcomm's IP licensing model, diversified revenue streams, and semiconductor industry positioning as supporting points, while flagging trade policy/tariff exposure and industry cyclicality as risks.
+Identified Qualcomm's IP licensing model, diversified revenue streams, and semiconductor industry positioning as supporting points, while flagging trade policy/tariff exposure and industry cyclicality as risks.
 
 **Salesforce — Invest**
-Reasoning grounded in retrieved evidence around enterprise SaaS positioning and recurring revenue strength, balanced against competitive risk factors.
+Reasoning grounded in retrieved evidence around enterprise SaaS positioning and recurring revenue strength, balanced against competitive risk factors retrieved from recent news.
 
 **Paytm — Pass**
-The risk factors retrieved (regulatory and financial red flags specific to Paytm) outweighed the supporting evidence, resulting in a Pass decision.
+The risk factors retrieved (regulatory and financial red flags specific to Paytm) outweighed the supporting evidence retrieved, resulting in a Pass decision.
 
-*(Additional run logs are available in `chat_logs.md`, which documents the actual build process including the debugging of edge cases like this.)*
+*(The full build process — including catching and fixing the JSON parsing issue mentioned above — is documented in `chat_logs.md`.)*
 
 ## What I would improve with more time
 
-1. **Persist reports to an actual database** instead of `localStorage`, so Saved Reports and Recent Activity survive across devices/sessions, not just the current browser.
-2. **Surface source citations** — right now the RAG-retrieved chunks inform the reasoning but aren't shown to the user directly; exposing which specific search result backed which claim would make the output more auditable.
-3. **Add a confidence calibration step** — the current confidence score comes directly from the LLM's own self-assessment, which isn't necessarily well-calibrated. A separate verification pass (or comparing against a held-out set of known outcomes) would make that number more trustworthy.
-4. **Handle Tavily rate limits / failures more gracefully** — currently a failed search call fails the whole pipeline rather than degrading gracefully with partial information.
+1. **Move Saved Reports / Recent Activity to a real database** instead of `localStorage`, so history persists across devices and browser sessions rather than just the current browser.
+2. **Surface source citations** — the RAG-retrieved chunks currently inform the reasoning but aren't shown to the user directly; exposing which specific search result backed which claim would make the output more auditable.
+3. **Add a confidence calibration step** — the current confidence score is the LLM's own self-assessment, which isn't necessarily well-calibrated. A separate verification pass, or comparison against a held-out set of known outcomes, would make that number more trustworthy.
+4. **Handle Tavily failures more gracefully** — right now a failed search call fails the whole pipeline; partial results (e.g., 3 out of 4 categories) should still be usable rather than failing outright.
 
 ---
 
