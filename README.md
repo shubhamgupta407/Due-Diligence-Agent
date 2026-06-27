@@ -45,6 +45,10 @@ The product also includes a full platform around the agent — a dashboard with 
 
 The agent is orchestrated with **LangGraph.js** as a state graph with three nodes sharing a single `AgentState` object, and every step in this pipeline makes a real, live call — there's no mocked data or simulated delay anywhere in it.
 
+### 📊 Note on Confidence Scoring
+**Confidence score isn't static** — it dynamically reflects how much relevant evidence was actually retrieved during the RAG phase. A well-known company with rich public data scores higher due to vector density; an obscure one with thin coverage scores lower, natively adjusting risk exposure even *before* the LLM reasons over it.
+
+
 **1. Research Node** (`src/lib/agent/nodes/research.ts`) — Makes four simultaneous, real HTTP requests to the Tavily API (via `Promise.all`) for a given company: business overview, recent news, competitor landscape, and risk factors. This genuinely scrapes the live web every time — there's no fallback or cached text if Tavily is unavailable.
 
 **2. RAG Node** (`src/lib/agent/nodes/rag.ts`) — This exists because the raw output from four separate searches is too long and too noisy to hand directly to an LLM — you'd hit token limits and dilute the signal with irrelevant text. Each category's raw text is chunked using LangChain.js's `RecursiveCharacterTextSplitter` (~250 words per chunk), then embedded **locally** using **Xenova Transformers.js** (`all-MiniLM-L6-v2`, the same model family as Python's `sentence-transformers`, running directly in Node). Cosine similarity is computed against the retrieval query to pull the top relevant chunks per category — all of this runs at request time, nothing is pre-computed.
