@@ -1,4 +1,4 @@
-import { Search, FolderOpen, Clock, Settings, HelpCircle, BarChart2, Activity } from "lucide-react";
+import { Search, FolderOpen, Clock, Settings, HelpCircle, BarChart2, Activity, BookOpen } from "lucide-react";
 
 interface SidebarProps {
   activeTab: string;
@@ -41,6 +41,10 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
             <a onClick={() => setActiveTab("network")} className={getTabClass("network")}>
               <Activity size={16} />
               Agent Network
+            </a>
+            <a onClick={() => setActiveTab("framework")} className={getTabClass("framework")}>
+              <BookOpen size={16} />
+              Analysis Framework
             </a>
           </nav>
         </div>

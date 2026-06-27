@@ -70,6 +70,9 @@ Please analyze this information and provide your investment decision, reasoning,
   console.log(`[Decision Node] Decision for ${companyName}: ${result.decision}`);
 
   return {
-    finalDecision: result as any, // Cast is fine here, matches schema
+    finalDecision: {
+      ...result,
+      dataSufficiency: state.dataSufficiency,
+    } as any,
   };
 }

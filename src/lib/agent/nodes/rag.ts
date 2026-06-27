@@ -49,7 +49,11 @@ class MemoryVectorStore {
     // Sort by score descending
     results.sort((a, b) => b.score - a.score);
     
-    return results.slice(0, k).map(r => new Document({ pageContent: r.content, metadata: r.metadata }));
+    return results.slice(0, k).map(r => {
+      const doc = new Document({ pageContent: r.content, metadata: r.metadata });
+      (doc as any).score = r.score;
+      return doc;
+    });
   }
 }
 
@@ -122,12 +126,54 @@ export async function ragNode(state: AgentStateType): Promise<Partial<AgentState
 
   console.log(`[RAG Node] Retrieved top ${results.length} relevant chunks.`);
 
+  // Debugging: Log the actual chunk counts and similarity scores per category
+  const categoryStats: Record<string, { count: number, scores: number[] }> = {
+    overview: { count: 0, scores: [] },
+    news: { count: 0, scores: [] },
+    competitors: { count: 0, scores: [] },
+    risks: { count: 0, scores: [] }
+  };
+
+  results.forEach(r => {
+    const cat = r.metadata.category;
+    const score = (r as any).score || 0;
+    if (categoryStats[cat]) {
+      categoryStats[cat].count++;
+      categoryStats[cat].scores.push(score);
+    }
+  });
+
+  console.log(`[RAG Node] Data Sufficiency Debugging Stats for ${companyName}:`);
+  for (const [cat, stats] of Object.entries(categoryStats)) {
+    console.log(`  - ${cat}: ${stats.count} chunks, scores: [${stats.scores.map(s => s.toFixed(3)).join(", ")}]`);
+  }
+
   // Condense the chunks into a single context string for the LLM
   const ragContext = results
     .map((r, i) => `--- Chunk ${i + 1} (${r.metadata.category}) ---\n${r.pageContent}`)
     .join("\n\n");
 
+  // Calculate Data Sufficiency
+  // We check which categories had chunks that made it into the top results
+  // We use a relatively low threshold (0.1) because cosine similarity for dense embeddings 
+  // across diverse text can often sit in the 0.2-0.5 range.
+  const allCategories = ["overview", "news", "competitors", "risks"];
+  const strongCategories = new Set(
+    results.filter(r => (r as any).score > 0.1).map(r => r.metadata.category)
+  );
+  
+  const weakCategories = allCategories.filter(c => !strongCategories.has(c));
+  const isLowConfidence = weakCategories.length >= 2;
+
+  if (isLowConfidence) {
+    console.log(`[RAG Node] LOW CONFIDENCE WARNING. Weak categories: ${weakCategories.join(", ")}`);
+  }
+
   return {
     ragContext,
+    dataSufficiency: {
+      isLowConfidence,
+      weakCategories,
+    }
   };
 }

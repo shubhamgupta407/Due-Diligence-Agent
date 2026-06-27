@@ -10,6 +10,20 @@ export function ReportView({ companyName, result }: ReportProps) {
 
   return (
     <div className="max-w-6xl mx-auto py-8 animate-in fade-in duration-500">
+      
+      {/* Low Confidence Banner */}
+      {result.dataSufficiency?.isLowConfidence && (
+        <div className="mb-8 bg-red-50 border border-red-200 rounded-md p-4 flex items-start gap-3 shadow-sm">
+          <ShieldAlert size={20} className="text-red-600 shrink-0 mt-0.5" />
+          <div>
+            <h3 className="text-sm font-bold text-red-900">⚠ Limited public data found for this company.</h3>
+            <p className="text-sm text-red-700 mt-1">
+              Research was thin in: <span className="font-semibold">{result.dataSufficiency.weakCategories.join(", ")}</span>. This recommendation has lower reliability than usual.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Report Header - System Readout Style */}
       <div className="flex items-start justify-between mb-8 pb-4 border-b-2 border-gray-900">
         <div>

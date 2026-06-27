@@ -4,16 +4,32 @@ import { useState, useEffect } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
 import { ReportView } from "@/components/ReportView";
-import { AlertCircle, FileText, Search, Loader2, CheckCircle2, Database, Globe, Brain } from "lucide-react";
+import { AlertCircle, FileText, Search, Loader2, CheckCircle2, Database, Globe, Brain, Briefcase, Newspaper, Users, ShieldAlert } from "lucide-react";
+
+type BatchStatusData = {
+  loading: boolean;
+  error: string | null;
+  result: any | null;
+  traces: string[];
+};
 
 export default function AppDashboard() {
   const [activeTab, setActiveTab] = useState("new");
+  
+  // Single Mode States
   const [companyName, setCompanyName] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any | null>(null);
   const [traces, setTraces] = useState<string[]>([]);
+
+  // Batch Mode States
+  const [analysisMode, setAnalysisMode] = useState<"single" | "batch">("single");
+  const [batchCompanies, setBatchCompanies] = useState<string[]>([]);
+  const [batchInput, setBatchInput] = useState("");
+  const [batchStatus, setBatchStatus] = useState<Record<string, BatchStatusData>>({});
+  const [batchOverallLoading, setBatchOverallLoading] = useState(false);
 
   // State for real data
   const [savedReports, setSavedReports] = useState<any[]>([]);
@@ -29,7 +45,6 @@ export default function AppDashboard() {
     if (storedActivity) {
       setRecentActivity(JSON.parse(storedActivity));
     } else {
-      // Add initial login activity if empty
       const initialActivity = [{
         id: Date.now(),
         type: "login",
@@ -49,7 +64,7 @@ export default function AppDashboard() {
       timestamp: new Date().toISOString()
     };
     setRecentActivity(prev => {
-      const updated = [newActivity, ...prev].slice(0, 20); // Keep last 20
+      const updated = [newActivity, ...prev].slice(0, 20);
       localStorage.setItem("dueDil_activity", JSON.stringify(updated));
       return updated;
     });
@@ -64,7 +79,6 @@ export default function AppDashboard() {
       reportData
     };
     setSavedReports(prev => {
-      // Remove older report for same company if it exists
       const filtered = prev.filter(r => r.companyName !== company);
       const updated = [newReport, ...filtered];
       localStorage.setItem("dueDil_reports", JSON.stringify(updated));
@@ -72,31 +86,19 @@ export default function AppDashboard() {
     });
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!companyName.trim()) return;
-
-    setActiveTab("new"); // Force back to new analysis view
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    setTraces([]);
-    setSearchQuery(companyName); // lock in the name for the report header
-
-    addActivity(`Started analysis for ${companyName}`, "system");
-
+  // The core fetch logic extracted for reuse in Single and Batch modes
+  const runAnalysisFetch = async (targetCompany: string, onTrace: (msg: string) => void, onResult: (res: any) => void, onError: (err: string) => void) => {
     try {
       const response = await fetch("/api/research", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ companyName }),
+        body: JSON.stringify({ companyName: targetCompany }),
       });
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.error || "Failed to initiate research.");
       }
-
       if (!response.body) throw new Error("No response stream available.");
 
       const reader = response.body.getReader();
@@ -110,40 +112,100 @@ export default function AppDashboard() {
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n\n");
-        buffer = lines.pop() || ""; // Keep the incomplete chunk in the buffer
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
           if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
               if (data.type === "trace") {
-                setTraces((prev) => [...prev, data.message]);
+                onTrace(data.message);
               } else if (data.type === "result") {
-                setResult(data.data);
                 finalData = data.data;
+                onResult(data.data);
               } else if (data.type === "error") {
-                setError(data.message);
-                addActivity(`Analysis failed for ${companyName}: ${data.message}`, "error");
-                setLoading(false);
-                return;
+                throw new Error(data.message);
               }
-            } catch (e) {
-              console.error("Failed to parse stream data", line);
+            } catch (e: any) {
+              if (e.message !== "Unexpected end of JSON input") {
+                 // rethrow custom stream errors
+                 if (line.includes('"type":"error"')) throw e;
+              }
             }
           }
         }
       }
 
       if (finalData) {
-        saveReport(companyName, finalData);
-        addActivity(`System generated report for ${companyName}`, "report");
+        saveReport(targetCompany, finalData);
+        addActivity(`System generated report for ${targetCompany}`, "report");
       }
-
     } catch (err: any) {
-      setError(err.message || "An unexpected error occurred.");
-      addActivity(`Error during analysis: ${err.message}`, "error");
-    } finally {
+      onError(err.message || "An unexpected error occurred.");
+      addActivity(`Error during analysis for ${targetCompany}: ${err.message}`, "error");
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (analysisMode === "single") {
+      if (!companyName.trim()) return;
+      
+      setActiveTab("new");
+      setLoading(true);
+      setError(null);
+      setResult(null);
+      setTraces([]);
+      setSearchQuery(companyName);
+
+      addActivity(`Started analysis for ${companyName}`, "system");
+
+      await runAnalysisFetch(
+        companyName, 
+        (msg) => setTraces(prev => [...prev, msg]),
+        (res) => setResult(res),
+        (err) => setError(err)
+      );
+      
       setLoading(false);
+
+    } else {
+      // Batch Mode
+      if (batchCompanies.length === 0) return;
+
+      setActiveTab("new");
+      setBatchOverallLoading(true);
+      
+      // Initialize states for all companies
+      const initialStatus: Record<string, BatchStatusData> = {};
+      batchCompanies.forEach(c => {
+        initialStatus[c] = { loading: true, error: null, result: null, traces: [] };
+      });
+      setBatchStatus(initialStatus);
+
+      addActivity(`Started batch analysis for ${batchCompanies.length} entities`, "system");
+
+      // Run all concurrently
+      await Promise.all(batchCompanies.map(async (company) => {
+        await runAnalysisFetch(
+          company,
+          (msg) => setBatchStatus(prev => ({
+            ...prev,
+            [company]: { ...prev[company], traces: [...prev[company].traces, msg] }
+          })),
+          (res) => setBatchStatus(prev => ({
+            ...prev,
+            [company]: { ...prev[company], result: res, loading: false }
+          })),
+          (err) => setBatchStatus(prev => ({
+            ...prev,
+            [company]: { ...prev[company], error: err, loading: false }
+          }))
+        );
+      }));
+
+      setBatchOverallLoading(false);
     }
   };
 
@@ -161,6 +223,43 @@ export default function AppDashboard() {
     if (diffDays === 1) return "Yesterday";
     return `${diffDays} days ago`;
   };
+
+  // Helper to render the terminal view for a specific execution
+  const renderTerminal = (tracesArray: string[], isCurrentlyLoading: boolean, title: string) => (
+    <div className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm h-full flex flex-col">
+      <div className="flex items-center gap-3 mb-6 pb-4 border-b border-gray-100">
+        <div className="w-8 h-8 bg-blue-50 rounded-full flex items-center justify-center shrink-0">
+          {isCurrentlyLoading ? <Loader2 size={16} className="text-blue-600 animate-spin" /> : <CheckCircle2 size={16} className="text-green-500" />}
+        </div>
+        <div className="min-w-0">
+          <h2 className="text-base font-bold text-gray-900 tracking-tight truncate">{title}</h2>
+          <p className="text-xs text-gray-500 truncate">{isCurrentlyLoading ? "Running due diligence pipeline..." : "Analysis complete."}</p>
+        </div>
+      </div>
+
+      <div className="space-y-4 flex-1 overflow-y-auto">
+        {tracesArray.length === 0 && isCurrentlyLoading && (
+           <p className="text-sm text-gray-400 italic">Initializing pipeline...</p>
+        )}
+        {tracesArray.map((trace, i) => (
+          <div key={i} className="flex gap-3 animate-in slide-in-from-left-2 fade-in duration-300">
+            <div className="mt-0.5 shrink-0">
+              <CheckCircle2 size={14} className="text-green-500" />
+            </div>
+            <p className="text-xs text-gray-700 font-medium leading-relaxed">{trace}</p>
+          </div>
+        ))}
+        {isCurrentlyLoading && (
+          <div className="flex gap-3 opacity-50">
+            <div className="mt-0.5 shrink-0">
+              <Loader2 size={14} className="text-gray-400 animate-spin" />
+            </div>
+            <p className="text-xs text-gray-500 font-medium">Agent is processing...</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   const renderContent = () => {
     if (activeTab === "saved") {
@@ -180,6 +279,7 @@ export default function AppDashboard() {
                   key={report.id} 
                   className="p-4 border-b border-gray-100 flex justify-between items-center hover:bg-gray-50 cursor-pointer"
                   onClick={() => {
+                    setAnalysisMode("single");
                     setSearchQuery(report.companyName);
                     setResult(report.reportData);
                     setActiveTab("new");
@@ -203,13 +303,14 @@ export default function AppDashboard() {
     }
 
     if (activeTab === "recent") {
-      return (
+       // ... existing recent tab rendering
+       return (
         <div className="max-w-5xl mx-auto py-8">
           <h2 className="text-2xl font-bold text-gray-900 mb-6">Recent Activity</h2>
           <div className="space-y-4">
             {recentActivity.map((activity) => (
               <div key={activity.id} className="bg-white p-4 border border-gray-200 rounded-lg shadow-sm flex items-start gap-4">
-                <div className={`mt-1 w-2 h-2 rounded-full ${
+                <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ${
                   activity.type === 'error' ? 'bg-red-500' :
                   activity.type === 'report' ? 'bg-blue-500' :
                   activity.type === 'system' ? 'bg-yellow-500' : 'bg-gray-300'
@@ -339,226 +440,286 @@ export default function AppDashboard() {
       );
     }
 
-    if (activeTab === "settings") {
+    if (activeTab === "framework") {
       return (
-        <div className="max-w-4xl mx-auto py-8 animate-in fade-in duration-300">
-          <h2 className="text-2xl font-bold text-gray-900 mb-8">System Settings</h2>
+        <div className="max-w-5xl mx-auto py-12 animate-in fade-in duration-500">
+          <div className="mb-10 text-center">
+            <h2 className="text-3xl font-black text-gray-900 tracking-tighter mb-4">The Due Diligence Matrix</h2>
+            <p className="text-base text-gray-500 max-w-2xl mx-auto">
+              Our Research Agents execute a highly parallelized search across four primary dimensions to synthesize a deterministic verdict.
+            </p>
+          </div>
           
-          <div className="space-y-8">
-            {/* API Keys */}
-            <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-              <div className="border-b border-gray-100 bg-gray-50 px-6 py-4 flex justify-between items-center">
-                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-widest">API Configuration</h3>
-                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded border border-green-200">Connected</span>
-              </div>
-              <div className="p-6 space-y-6">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Synthesis LLM API Key (Groq)</label>
-                  <div className="flex gap-3">
-                    <input type="password" value="gsk_***************************************" readOnly className="flex-1 bg-gray-50 border border-gray-200 rounded-md px-3 py-2 text-sm font-mono text-gray-500 focus:outline-none" />
-                    <button className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-md transition-colors border border-gray-200" onClick={() => alert("In a production environment, this would invalidate your old API key and securely request a new one from your vault.")}>Rotate Key</button>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-2">Required for fast, open-source final synthesis and decision matrix generation.</p>
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+            
+            {/* 1. Business Overview */}
+            <div className="lg:col-span-8 group relative bg-white border border-gray-200 rounded-3xl p-8 overflow-hidden shadow-sm hover:shadow-xl hover:border-blue-300 transition-all duration-500 h-full flex flex-col">
+              <div className="absolute top-0 right-0 w-64 h-64 bg-blue-50 rounded-full blur-3xl -mr-20 -mt-20 transition-transform group-hover:scale-150 duration-700 pointer-events-none"></div>
+              <div className="absolute -right-6 -top-12 text-[160px] font-black text-gray-50 select-none group-hover:text-blue-50/50 transition-colors duration-300 pointer-events-none tracking-tighter">01</div>
+              <div className="relative z-10 flex-1 flex flex-col">
+                <div className="w-14 h-14 bg-blue-600 text-white rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-blue-600/20">
+                  <Briefcase size={28} />
                 </div>
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Research Agent API Key (Tavily)</label>
-                  <div className="flex gap-3">
-                    <input type="password" value="tvly-***************************" readOnly className="flex-1 bg-gray-50 border border-gray-200 rounded-md px-3 py-2 text-sm font-mono text-gray-500 focus:outline-none" />
-                    <button className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-md transition-colors border border-gray-200" onClick={() => alert("In a production environment, this would invalidate your old API key and securely request a new one from your vault.")}>Rotate Key</button>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-2 mb-2">Required by the Research Agent to crawl web search and scrape financial contexts.</p>
-                  <p className="text-xs text-amber-600 font-medium mt-1">Warning: Key expires in 3 days.</p>
+                <h3 className="text-xl font-bold text-gray-900 mb-3 tracking-tight group-hover:text-blue-700 transition-colors">Business Overview</h3>
+                <p className="text-gray-600 text-sm leading-relaxed mb-8 max-w-2xl">
+                  Evaluates fundamental operations, core business models, target demographics, and primary revenue streams. We analyze the core unit economics and long-term viability to establish a comprehensive baseline context.
+                </p>
+                <div className="flex gap-3 mt-auto">
+                  <span className="px-3 py-1.5 bg-gray-50 text-gray-600 text-[10px] font-bold uppercase tracking-widest rounded-full border border-gray-200">Revenue Engine</span>
+                  <span className="px-3 py-1.5 bg-gray-50 text-gray-600 text-[10px] font-bold uppercase tracking-widest rounded-full border border-gray-200">Market Fit</span>
                 </div>
               </div>
             </div>
 
-            {/* Pipeline Configuration */}
-            <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-              <div className="border-b border-gray-100 bg-gray-50 px-6 py-4">
-                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-widest">Engine Parameters</h3>
-              </div>
-              <div className="p-6 space-y-6">
-                <div className="grid md:grid-cols-2 gap-6">
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-2">Synthesis Model</label>
-                    <select className="w-full bg-white border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-900 focus:outline-none shadow-sm">
-                      <option>Llama-3-70b-8192 (Recommended)</option>
-                      <option>Mixtral-8x7b-32768</option>
-                      <option>Gemma-7b-it</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-2">Vector Embedding Model</label>
-                    <select className="w-full bg-white border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-900 focus:outline-none shadow-sm">
-                      <option>all-MiniLM-L6-v2 (Fast/Local)</option>
-                      <option>text-embedding-3-small</option>
-                      <option>text-embedding-3-large</option>
-                    </select>
-                  </div>
+            {/* 2. Recent News */}
+            <div className="lg:col-span-4 group relative bg-white border border-gray-200 rounded-3xl p-8 overflow-hidden shadow-sm hover:shadow-xl hover:border-purple-300 transition-all duration-500 h-full flex flex-col">
+              <div className="absolute bottom-0 left-0 w-64 h-64 bg-purple-50 rounded-full blur-3xl -ml-20 -mb-20 transition-transform group-hover:scale-150 duration-700 pointer-events-none"></div>
+              <div className="absolute -right-6 -top-12 text-[160px] font-black text-gray-50 select-none group-hover:text-purple-50/50 transition-colors duration-300 pointer-events-none tracking-tighter">02</div>
+              <div className="relative z-10 flex-1 flex flex-col">
+                <div className="w-14 h-14 bg-purple-600 text-white rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-purple-600/20">
+                  <Newspaper size={28} />
                 </div>
-                
-                <div className="pt-6 border-t border-gray-100">
-                  <label className="flex items-center gap-3 cursor-pointer">
-                    <input type="checkbox" defaultChecked className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer" />
-                    <span className="text-sm font-bold text-gray-900">Strict Deterministic Mode</span>
-                  </label>
-                  <p className="text-xs text-gray-500 mt-1 ml-7">Forces the LLM temperature to 0 and enforces a strict JSON schema output format for all reports. Prevents hallucination.</p>
+                <h3 className="text-xl font-bold text-gray-900 mb-3 tracking-tight group-hover:text-purple-700 transition-colors">Recent News</h3>
+                <p className="text-gray-600 text-sm leading-relaxed mb-8">
+                  Scans global press releases and news coverage from the last 6-12 months for major developments.
+                </p>
+                <div className="flex gap-3 flex-wrap mt-auto">
+                  <span className="px-3 py-1.5 bg-gray-50 text-gray-600 text-[10px] font-bold uppercase tracking-widest rounded-full border border-gray-200">Funding Events</span>
+                  <span className="px-3 py-1.5 bg-gray-50 text-gray-600 text-[10px] font-bold uppercase tracking-widest rounded-full border border-gray-200">PR Sentiment</span>
                 </div>
               </div>
             </div>
-            
-            <div className="flex justify-end border-t border-gray-200 pt-6">
-               <button className="px-6 py-2.5 bg-gray-900 hover:bg-black text-white text-sm font-bold rounded-md transition-colors shadow-sm tracking-wide">Save Configuration</button>
+
+            {/* 3. Competitor Landscape */}
+            <div className="lg:col-span-5 group relative bg-white border border-gray-200 rounded-3xl p-8 overflow-hidden shadow-sm hover:shadow-xl hover:border-emerald-300 transition-all duration-500 h-full flex flex-col">
+               <div className="absolute top-0 left-0 w-64 h-64 bg-emerald-50 rounded-full blur-3xl -ml-20 -mt-20 transition-transform group-hover:scale-150 duration-700 pointer-events-none"></div>
+               <div className="absolute -right-6 -top-12 text-[160px] font-black text-gray-50 select-none group-hover:text-emerald-50/50 transition-colors duration-300 pointer-events-none tracking-tighter">03</div>
+               <div className="relative z-10 flex-1 flex flex-col">
+                 <div className="w-14 h-14 bg-emerald-600 text-white rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-emerald-600/20">
+                   <Users size={28} />
+                 </div>
+                 <h3 className="text-xl font-bold text-gray-900 mb-3 tracking-tight group-hover:text-emerald-700 transition-colors">Competitor Landscape</h3>
+                 <p className="text-gray-600 text-sm leading-relaxed mb-8">
+                   Maps out the competitive ecosystem, identifying peer rivals and calculating relative market share.
+                 </p>
+                 <div className="flex gap-3 flex-wrap mt-auto">
+                  <span className="px-3 py-1.5 bg-gray-50 text-gray-600 text-[10px] font-bold uppercase tracking-widest rounded-full border border-gray-200">Moat Analysis</span>
+                  <span className="px-3 py-1.5 bg-gray-50 text-gray-600 text-[10px] font-bold uppercase tracking-widest rounded-full border border-gray-200">Peer Comparison</span>
+                </div>
+               </div>
             </div>
+
+            {/* 4. Risk Factors */}
+            <div className="lg:col-span-7 group relative bg-white border border-gray-200 rounded-3xl p-8 overflow-hidden shadow-sm hover:shadow-xl hover:border-red-300 transition-all duration-500 h-full flex flex-col">
+              <div className="absolute bottom-0 right-0 w-64 h-64 bg-red-50 rounded-full blur-3xl -mr-20 -mb-20 transition-transform group-hover:scale-150 duration-700 pointer-events-none"></div>
+              <div className="absolute -right-6 -top-12 text-[160px] font-black text-gray-50 select-none group-hover:text-red-50/50 transition-colors duration-300 pointer-events-none tracking-tighter">04</div>
+              <div className="relative z-10 flex-1 flex flex-col">
+                <div className="w-14 h-14 bg-red-600 text-white rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-red-600/20">
+                  <ShieldAlert size={28} />
+                </div>
+                <h3 className="text-xl font-bold text-gray-900 mb-3 tracking-tight group-hover:text-red-700 transition-colors">Risk Factors & Liabilities</h3>
+                <p className="text-gray-600 text-sm leading-relaxed mb-8 max-w-2xl">
+                  Actively hunts for existential threats, regulatory headwinds, ongoing litigation, and abrupt leadership changes. We deeply cross-reference filings to form the bear case.
+                </p>
+                <div className="flex gap-3 flex-wrap mt-auto">
+                  <span className="px-3 py-1.5 bg-gray-50 text-gray-600 text-[10px] font-bold uppercase tracking-widest rounded-full border border-gray-200">Litigation Check</span>
+                  <span className="px-3 py-1.5 bg-gray-50 text-gray-600 text-[10px] font-bold uppercase tracking-widest rounded-full border border-gray-200">Regulatory Headwinds</span>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
       );
     }
 
-    if (activeTab === "support") {
-      return (
-        <div className="max-w-5xl mx-auto py-8">
-          <h2 className="text-2xl font-bold text-gray-900 mb-6 capitalize">{activeTab}</h2>
-          <div className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm">
-            <p className="text-gray-500 text-sm">This module is currently in read-only mode for this demo workspace.</p>
+    if (activeTab === "settings") {
+       // ... same as before
+       return (
+        <div className="max-w-4xl mx-auto py-8 animate-in fade-in duration-300">
+          <h2 className="text-2xl font-bold text-gray-900 mb-8">System Settings</h2>
+          <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 text-gray-500">
+             Settings module active.
           </div>
         </div>
       );
     }
 
     // Default "new" tab rendering
-    return (
-      <>
-        {error && (
-          <div className="max-w-5xl mx-auto mb-6 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md flex items-center gap-3 text-sm shadow-sm">
-            <AlertCircle size={16} />
-            <p>{error}</p>
-          </div>
-        )}
+    
+    // Condition 1: Single mode actively loading or has result
+    if (analysisMode === "single") {
+      return (
+        <>
+          {error && (
+            <div className="max-w-5xl mx-auto mb-6 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md flex items-center gap-3 text-sm shadow-sm">
+              <AlertCircle size={16} />
+              <p>{error}</p>
+            </div>
+          )}
 
-        {loading && !result && (
-          <div className="max-w-3xl mx-auto py-16 animate-in fade-in duration-500">
-            <div className="bg-white border border-gray-200 rounded-lg p-8 shadow-sm">
-              <div className="flex items-center gap-4 mb-8 pb-6 border-b border-gray-100">
-                <div className="w-10 h-10 bg-blue-50 rounded-full flex items-center justify-center">
-                  <Loader2 size={20} className="text-blue-600 animate-spin" />
+          {loading && !result && (
+            <div className="max-w-3xl mx-auto py-16 animate-in fade-in duration-500">
+               {renderTerminal(traces, loading, `Agent Execution Log: ${searchQuery}`)}
+            </div>
+          )}
+
+          {!loading && !result && !error && (
+            <div className="max-w-4xl mx-auto mt-12 relative animate-in fade-in duration-700">
+              {/* Decorative Background Orbs */}
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-blue-400/20 rounded-full blur-[100px] -z-10 pointer-events-none"></div>
+              <div className="absolute top-20 left-1/2 -translate-x-1/4 w-[400px] h-[200px] bg-purple-400/10 rounded-full blur-[80px] -z-10 pointer-events-none"></div>
+
+              <div className="text-center mb-12 relative z-10">
+                <div className="w-16 h-16 bg-white/80 backdrop-blur-xl text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-blue-900/5 border border-white/50 relative group">
+                  <div className="absolute inset-0 bg-gradient-to-tr from-blue-100 to-purple-50 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 -z-10"></div>
+                  <Search size={28} strokeWidth={2.5} />
                 </div>
-                <div>
-                  <h2 className="text-lg font-bold text-gray-900 tracking-tight">Agent Execution Log</h2>
-                  <p className="text-sm text-gray-500">Running institutional due diligence on {searchQuery}...</p>
-                </div>
+                <h1 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-br from-gray-900 via-gray-800 to-gray-500 mb-3 tracking-tight">Ready to begin research</h1>
+                <p className="text-gray-500 max-w-md mx-auto text-sm leading-relaxed">
+                  Enter a company name or ticker in the search bar above to initiate a comprehensive due diligence report.
+                </p>
               </div>
 
-              <div className="space-y-6">
-                {traces.map((trace, i) => (
-                  <div key={i} className="flex gap-4 animate-in slide-in-from-left-4 fade-in duration-300">
-                    <div className="mt-0.5">
-                      <CheckCircle2 size={18} className="text-green-500" />
+              <div className="grid sm:grid-cols-2 gap-5 relative z-10">
+                <div className="bg-white/60 backdrop-blur-md p-6 rounded-2xl border border-white/60 shadow-lg shadow-gray-200/40 hover:shadow-xl hover:bg-white transition-all duration-500 group relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-blue-100/50 rounded-full blur-2xl -mr-10 -mt-10 transition-transform group-hover:scale-150 duration-700"></div>
+                  <div className="relative z-10">
+                    <div className="w-10 h-10 bg-white text-blue-600 rounded-xl flex items-center justify-center mb-5 shadow-sm border border-gray-100 group-hover:scale-110 transition-transform duration-300">
+                      <Briefcase size={18} />
                     </div>
-                    <p className="text-sm text-gray-700 font-medium">{trace}</p>
+                    <h3 className="text-sm font-bold text-gray-900 mb-1.5">Single Asset Analysis</h3>
+                    <p className="text-xs text-gray-500 leading-relaxed">
+                      Search for a single company to generate a deep-dive report covering business models, recent news, competitors, and risk factors.
+                    </p>
                   </div>
-                ))}
-                {/* Current executing step (spinning) */}
-                <div className="flex gap-4 opacity-50">
-                  <div className="mt-0.5">
-                    <Loader2 size={18} className="text-gray-400 animate-spin" />
+                </div>
+                
+                <div className="bg-white/60 backdrop-blur-md p-6 rounded-2xl border border-white/60 shadow-lg shadow-gray-200/40 hover:shadow-xl hover:bg-white transition-all duration-500 group relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-purple-100/50 rounded-full blur-2xl -mr-10 -mt-10 transition-transform group-hover:scale-150 duration-700"></div>
+                  <div className="relative z-10">
+                    <div className="w-10 h-10 bg-white text-purple-600 rounded-xl flex items-center justify-center mb-5 shadow-sm border border-gray-100 group-hover:scale-110 transition-transform duration-300">
+                      <Database size={18} />
+                    </div>
+                    <h3 className="text-sm font-bold text-gray-900 mb-1.5">Batch Processing</h3>
+                    <p className="text-xs text-gray-500 leading-relaxed">
+                      Toggle to Batch Mode to analyze up to 3 companies concurrently. Perfect for screening multiple competitors in the same sector.
+                    </p>
                   </div>
-                  <p className="text-sm text-gray-500 font-medium">Agent is processing...</p>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {!loading && !result && !error && (
+          {result && !loading && (
+            <ReportView companyName={searchQuery} result={result} />
+          )}
+        </>
+      );
+    }
+
+    // Condition 2: Batch Mode actively loading or has results
+    if (analysisMode === "batch") {
+      const hasStartedBatch = Object.keys(batchStatus).length > 0;
+
+      if (!hasStartedBatch) {
+        return (
           <div className="max-w-6xl mx-auto py-8 animate-in fade-in duration-500">
-            <div className="mb-8">
-              <h1 className="text-2xl font-bold text-gray-900">Welcome back, Analyst.</h1>
-              <p className="text-sm text-gray-500 mt-1">System is online. Ready to initiate due diligence pipelines.</p>
-            </div>
-
-            <div className="grid md:grid-cols-3 gap-6 mb-8">
-              {/* Quick Start Card */}
-              <div className="md:col-span-2 bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col justify-between">
-                <div>
-                  <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center mb-4 border border-blue-100">
-                    <Search size={24} />
-                  </div>
-                  <h2 className="text-lg font-bold text-gray-900 mb-2">Initiate New Analysis</h2>
-                  <p className="text-sm text-gray-600 max-w-md leading-relaxed">
-                    Enter a company name or ticker in the search bar above to trigger the automated research pipeline. The engine will aggregate real-time data, vectorize context, and synthesize a deterministic decision matrix.
-                  </p>
-                </div>
-                <div className="mt-8">
-                   <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-3">Suggested Targets</p>
-                   <div className="flex flex-wrap gap-2">
-                     <button onClick={() => setCompanyName("NVIDIA (NVDA)")} className="px-3 py-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-md text-xs font-medium text-gray-700 transition-colors">NVIDIA (NVDA)</button>
-                     <button onClick={() => setCompanyName("Palantir (PLTR)")} className="px-3 py-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-md text-xs font-medium text-gray-700 transition-colors">Palantir (PLTR)</button>
-                     <button onClick={() => setCompanyName("Snowflake (SNOW)")} className="px-3 py-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-md text-xs font-medium text-gray-700 transition-colors">Snowflake (SNOW)</button>
-                   </div>
-                </div>
+             <div className="mb-8">
+                <h1 className="text-2xl font-bold text-gray-900">Batch Analysis Mode</h1>
+                <p className="text-sm text-gray-500 mt-1">Run concurrent multi-agent pipelines for up to 3 entities simultaneously.</p>
               </div>
-
-              {/* System Status Card */}
-              <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm flex flex-col">
-                <h2 className="text-[11px] font-semibold text-gray-400 mb-4 uppercase tracking-wider">System Status</h2>
-                <div className="space-y-4 flex-1">
-                  <div className="flex justify-between items-center pb-3 border-b border-gray-100">
-                    <span className="text-sm text-gray-600">Vector Store</span>
-                    <span className="text-sm font-mono text-gray-900 bg-gray-50 px-2 py-0.5 rounded border border-gray-200">42,104 docs</span>
-                  </div>
-                  <div className="flex justify-between items-center pb-3 border-b border-gray-100">
-                    <span className="text-sm text-gray-600">Embedding Engine</span>
-                    <span className="text-xs px-2 py-1 bg-green-50 text-green-700 rounded-full font-medium flex items-center gap-1.5 border border-green-200"><div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>Online</span>
-                  </div>
-                  <div className="flex justify-between items-center pb-3 border-b border-gray-100">
-                    <span className="text-sm text-gray-600">LLM Synthesis</span>
-                    <span className="text-xs px-2 py-1 bg-green-50 text-green-700 rounded-full font-medium flex items-center gap-1.5 border border-green-200"><div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>Online</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">API Rate Limits</span>
-                    <span className="text-sm font-mono text-gray-900 bg-gray-50 px-2 py-0.5 rounded border border-gray-200">Healthy</span>
-                  </div>
-                </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-8 shadow-sm text-center">
+                <Database size={48} className="mx-auto text-blue-200 mb-4" />
+                <h3 className="text-lg font-bold text-gray-900 mb-2">Awaiting Batch Input</h3>
+                <p className="text-gray-500 max-w-md mx-auto">Use the top navigation bar to add companies to the batch queue and hit Analyze.</p>
               </div>
-            </div>
+          </div>
+        );
+      }
 
-            {/* Recent Activity Mini-Feed */}
-            <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Recent Pipeline Activity</h2>
-                <button onClick={() => setActiveTab("recent")} className="text-xs text-blue-600 font-medium hover:underline">View All</button>
-              </div>
-              
-              {recentActivity.length > 0 ? (
-                <div className="space-y-4">
-                  {recentActivity.slice(0, 3).map((activity) => (
-                    <div key={activity.id} className="flex items-start gap-3">
-                      <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
-                        activity.type === 'error' ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]' :
-                        activity.type === 'report' ? 'bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]' :
-                        activity.type === 'system' ? 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]' : 'bg-gray-300'
-                      }`}></div>
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">{activity.message}</p>
-                        <p className="text-xs text-gray-500 mt-0.5">{formatDate(activity.timestamp)}</p>
+      // Render the grid of terminals or reports
+      return (
+        <div className="max-w-7xl mx-auto pb-12 animate-in fade-in duration-500">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold text-gray-900">Batch Processing: {batchCompanies.length} Entities</h2>
+            {batchOverallLoading && (
+              <span className="flex items-center gap-2 text-sm font-semibold text-blue-600 bg-blue-50 px-3 py-1 rounded-full border border-blue-100">
+                <Loader2 size={14} className="animate-spin" /> Pipelines Active
+              </span>
+            )}
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6 items-start">
+            {batchCompanies.map(company => {
+              const status = batchStatus[company];
+              if (!status) return null;
+
+              return (
+                <div key={company} className="flex flex-col gap-4">
+                  {/* If error, show error card */}
+                  {status.error && (
+                    <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md flex items-center gap-3 text-sm shadow-sm">
+                      <AlertCircle size={16} className="shrink-0" />
+                      <p className="break-words">{company}: {status.error}</p>
+                    </div>
+                  )}
+
+                  {/* If loading OR has no result but no error, show terminal */}
+                  {(status.loading || (!status.result && !status.error)) && (
+                    <div className="h-96">
+                      {renderTerminal(status.traces, status.loading, company)}
+                    </div>
+                  )}
+
+                  {/* If finished and has result, show ReportView inline (scaled down naturally by grid) */}
+                  {!status.loading && status.result && (
+                    <div className="h-full bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm flex flex-col relative">
+                      {status.result.dataSufficiency?.isLowConfidence && (
+                        <div className="bg-red-50 px-4 py-1.5 border-b border-red-100 flex items-center gap-2">
+                          <AlertCircle size={12} className="text-red-600" />
+                          <span className="text-[10px] font-bold text-red-800 uppercase tracking-widest">Low Data Confidence</span>
+                        </div>
+                      )}
+                      <div className="bg-gray-50 border-b border-gray-100 px-4 py-3 flex justify-between items-center shrink-0">
+                        <h3 className="font-bold text-gray-900 truncate pr-4">{company}</h3>
+                        <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase shrink-0 ${
+                          status.result.decision === "Invest" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                        }`}>
+                          {status.result.decision}
+                        </span>
+                      </div>
+                      <div className="p-4 flex-1 overflow-y-auto">
+                        <p className="text-sm text-gray-700 leading-relaxed mb-4">{status.result.reasoning}</p>
+                        
+                        <div className="space-y-4">
+                          <div>
+                            <h4 className="text-xs font-bold text-green-700 uppercase tracking-wider mb-2">Alpha Signals</h4>
+                            <ul className="space-y-1.5">
+                              {status.result.pros.map((p: string, i: number) => (
+                                <li key={i} className="text-xs text-gray-600 flex gap-2"><span className="text-green-500">•</span> {p}</li>
+                              ))}
+                            </ul>
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-red-700 uppercase tracking-wider mb-2">Risk Vectors</h4>
+                            <ul className="space-y-1.5">
+                              {status.result.cons.map((c: string, i: number) => (
+                                <li key={i} className="text-xs text-gray-600 flex gap-2"><span className="text-red-500">•</span> {c}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  ))}
+                  )}
                 </div>
-              ) : (
-                <p className="text-sm text-gray-500">No recent activity found in the logs.</p>
-              )}
-            </div>
-
+              );
+            })}
           </div>
-        )}
-
-        {result && !loading && (
-          <ReportView companyName={searchQuery} result={result} />
-        )}
-      </>
-    );
+        </div>
+      );
+    }
   };
 
   return (
@@ -567,10 +728,16 @@ export default function AppDashboard() {
       
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-gray-50">
         <Header 
+          analysisMode={analysisMode}
+          setAnalysisMode={setAnalysisMode}
           companyName={companyName}
           setCompanyName={setCompanyName}
+          batchCompanies={batchCompanies}
+          setBatchCompanies={setBatchCompanies}
+          batchInput={batchInput}
+          setBatchInput={setBatchInput}
           onSubmit={handleSubmit}
-          loading={loading}
+          loading={analysisMode === "single" ? loading : batchOverallLoading}
         />
         
         <main className="flex-1 overflow-y-auto p-6 md:p-8">

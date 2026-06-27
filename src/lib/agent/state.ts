@@ -19,12 +19,25 @@ export const AgentState = Annotation.Root({
   // The condensed chunks retrieved from the RAG pipeline.
   ragContext: Annotation<string>(),
 
+  // Data sufficiency signal calculated during RAG
+  dataSufficiency: Annotation<{
+    isLowConfidence: boolean;
+    weakCategories: string[];
+  }>({
+    reducer: (curr, next) => ({ ...curr, ...next }),
+    default: () => ({ isLowConfidence: false, weakCategories: [] }),
+  }),
+
   // The final structured decision from the LLM.
   finalDecision: Annotation<{
     decision: "Invest" | "Pass" | null;
     reasoning: string;
     pros: string[];
     cons: string[];
+    dataSufficiency?: {
+      isLowConfidence: boolean;
+      weakCategories: string[];
+    };
   }>({
     reducer: (curr, next) => ({ ...curr, ...next }),
     default: () => ({ decision: null, reasoning: "", pros: [], cons: [] }),
