@@ -1,83 +1,94 @@
-# Due Diligence AI (DueDil)
+# Due Diligence Agent
 
-Due Diligence AI is a highly sophisticated, multi-agent AI platform designed to automate and accelerate financial due diligence and competitive research. Built with a stunning, institutional-grade UI, the platform orchestrates a network of specialized AI agents to aggregate live market data, semantically vectorize context, and deterministically synthesize comprehensive investment reports.
+An AI agent that takes a company name, researches it across multiple dimensions, and returns an Invest/Pass decision with reasoning grounded in the evidence it actually retrieved — not just a single LLM call guessing from its own training data.
 
-## 🚀 Overview — What it does
+## Overview — what it does
 
-Traditional due diligence requires hours of manual web scraping, reading SEC filings, and aggregating competitor data. DueDil automates this entire pipeline using a multi-agent framework:
-1. **Intake:** Users input a target company or financial query.
-2. **Research Agent (Tavily):** Crawls the live web, SEC filings, and news sources to extract real-time financial context.
-3. **Reasoning Agent (Groq / Llama-3):** Evaluates the aggregated state schema, applies logical reasoning, and determines risk factors.
-4. **Final Synthesis:** Outputs a highly structured, deterministic JSON payload rendered as an interactive, quantitative report featuring confidence scoring, bear/bull cases, and actionable insights.
+You give it a company name. It runs four parallel web searches (business overview, recent news, competitor landscape, risk factors), filters that raw evidence down through a RAG pipeline so only the relevant signal reaches the model, and then has an LLM produce a structured decision: Invest or Pass, with reasoning, supporting points, and risk factors — all traceable back to the evidence that was actually retrieved.
 
-## 🛠️ How to run it
+The product also includes a full platform around the agent — a dashboard with saved reports, recent activity, a live agent network view showing how the LangGraph state schema flows between agents, and a settings page for configuring the underlying models.
+
+## How to run it
 
 ### Prerequisites
 - Node.js 18.x or later
 - npm or yarn
-- API Keys for backend integration (Groq, Tavily)
+- A Groq API key ([console.groq.com](https://console.groq.com))
+- A Tavily API key ([tavily.com](https://tavily.com))
 
-### Setup Steps
+### Setup
+
 1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/shubhamgupta407/due-dilligence-agent.git
-   cd due-dilligence-agent
-   ```
+```bash
+   git clone https://github.com/shubhamgupta407/due-diligence-agent.git
+   cd due-diligence-agent
+```
 
 2. **Install dependencies:**
-   ```bash
+```bash
    npm install
-   ```
+```
 
-3. **Configure Environment Variables:**
-   Create a `.env.local` file in the root directory based on the provided template:
-   ```env
-   # .env.local
+3. **Set up environment variables** — create a `.env.local` file in the root:
+```env
    GROQ_API_KEY=gsk_your_groq_api_key_here
    TAVILY_API_KEY=tvly_your_tavily_api_key_here
-   NEXT_PUBLIC_APP_URL=http://localhost:3000
-   ```
+```
 
-4. **Run the development server:**
-   ```bash
+4. **Run the dev server:**
+```bash
    npm run dev
-   ```
-   Open [http://localhost:3000](http://localhost:3000) in your browser to view the application.
+```
+   Open [http://localhost:3000](http://localhost:3000) — this is the marketing/landing page. Click through to `/platform` to use the actual tool.
 
-## 🧠 How it works — Approach and Architecture
+## How it works — approach and architecture
 
-The application is built using a modern **Next.js (App Router)** frontend paired with a conceptual **LangGraph** backend architecture.
+The agent is orchestrated with **LangGraph.js** as a state graph with three nodes sharing a single `AgentState` object:
 
-### Frontend Architecture
-- **Framework:** React / Next.js with TypeScript for strict type-safety.
-- **Styling:** Tailwind CSS for a highly responsive, custom-built, "cyber-institutional" aesthetic (glassmorphism, radial gradients, custom keyframe animations).
-- **Icons:** `lucide-react` for clean, consistent UI iconography.
+**1. Research Node** — Runs four parallel calls to the Tavily Search API for a given company: business overview, recent news, competitor landscape, and risk factors (lawsuits, leadership changes, financial red flags). This is the only node that touches the live web.
 
-### Backend / Agent Architecture (Conceptualized)
-The platform relies on a **Shared State Schema** orchestrated by LangGraph:
-- **State Schema:** A shared JSON matrix passed between agents containing the ongoing analysis, risk flags, and raw data chunks.
-- **Research Node:** Powered by the Tavily Search API. It acts as the "eyes," aggressively scraping broad context and filtering out noise.
-- **Vector Node:** Data is passed through a local `all-MiniLM-L6-v2` embedding model for fast, zero-latency semantic chunking and retrieval.
-- **Synthesis Node:** Powered by Groq (Llama-3-70b-8192). It acts as the "brain," strictly enforcing a `temperature=0` deterministic mode to prevent hallucinations and generate the final Invest/Pass matrix.
+**2. RAG Node** — This exists because the raw output from four separate searches is too long and too noisy to hand directly to an LLM — you'd hit token limits and dilute the signal with irrelevant text. So each category's raw text is chunked using LangChain.js's `RecursiveCharacterTextSplitter` (~250 words per chunk), embedded locally using **Xenova Transformers.js** (`all-MiniLM-L6-v2` — the same model family as `sentence-transformers`, just running in JS instead of Python), and stored in an in-memory vector store. The top 3-5 most relevant chunks per category are retrieved using a query targeted at investment-relevant signals, and that's what actually reaches the LLM.
 
-## ⚖️ Key decisions & trade-offs
+**3. Decision Node** — Takes the condensed, RAG-filtered evidence across all four categories and prompts Groq (Llama 3.3 70B) to produce a structured decision: Invest or Pass, reasoning, a list of supporting points, and a list of risk factors — all in strict JSON, with temperature set to 0.
 
-- **Groq over OpenAI:** Chose Groq (Llama-3) for the Synthesis Agent instead of OpenAI (GPT-4o). **Why:** Groq provides ultra-low latency token generation which is critical for real-time agentic reasoning pipelines, while remaining highly capable and open-source friendly.
-- **LangGraph over AutoGPT/BabyAGI:** Selected LangGraph for orchestration. **Why:** Financial due diligence requires strictly deterministic workflows. LangGraph's cyclical, state-machine approach allows us to define rigid boundaries and validation loops, whereas traditional autonomous agents are too unpredictable for institutional finance.
-- **Custom CSS Animations over Framer Motion:** Used pure CSS keyframes (`@keyframes flow-dash`) and SVG paths for the Agent Network live topology diagram. **Why:** To keep the bundle size extremely lightweight and maintain 60fps performance without relying on heavy third-party animation libraries.
-- **Mocked UI vs Full Backend:** Currently, the UI simulates the latency and output of the LangGraph backend using timeouts and static state. **Trade-off:** Allows for rapid UI/UX iteration and architectural visualization without incurring massive API costs during the initial design phase.
+There's also a lightweight pre-flight check before any of this runs: a fast, low-temperature Groq call checks whether the input is actually a plausible company name before it reaches Tavily. If you type random characters, it's rejected immediately with a clear error instead of producing a hallucinated result for a company that doesn't exist.
 
-## 📊 Example Runs
+**Frontend:** Next.js (App Router) for both the UI and the API routes, TypeScript throughout, Tailwind CSS for styling. The backend streams the actual LangGraph node execution to the frontend via Server-Sent Events, so the UI shows real progress (which node is currently running) rather than a generic spinner.
 
-[To be populated with actual run details once screenshots are provided]
+## Key decisions & trade-offs
 
-## 🔮 What I would improve with more time
+- **Xenova Transformers.js over OpenAI embeddings** — Needed local, free embeddings rather than an external API call for every chunk. `all-MiniLM-L6-v2` via Xenova runs entirely in Node, no extra API cost or latency, and is the same model family I'd used with `sentence-transformers` in a previous Python project.
 
-If given more time, I would focus on extending the platform's robustness and analytical depth:
-1. **Live WebSocket Integration:** Replace the mocked polling states with real-time WebSockets to stream the LangGraph execution trace directly to the UI, allowing the user to watch the agents "think" in real-time.
-2. **RAG Knowledge Base:** Implement a persistent vector database (like Pinecone or Qdrant) so the Research Agent can query historical due diligence reports and cross-reference previous analyses.
-3. **PDF Generation / Export:** Add a feature to compile the dynamic React report view into a branded, downloadable PDF for sharing with investment committees.
-4. **Human-in-the-Loop (HITL) Interruption:** Allow the user to pause the LangGraph pipeline halfway through execution if the Research Agent flags a massive risk, enabling the user to pivot the research direction manually before burning LLM tokens on the final synthesis.
+- **Groq over OpenAI for synthesis** — Groq's inference speed meant the decision step added only a couple of seconds on top of the search latency, which matters a lot when the user is already waiting through four web searches plus embedding/retrieval. The trade-off is somewhat less polished reasoning than GPT-4-class models, partially offset by moving to the 70B model after the 8B model was inconsistent with strict JSON output (see below).
+
+- **`jsonMode` over tool-calling for structured output** — Initially used Groq's native tool-calling to force structured JSON output, but it intermittently broke on certain companies (Groq's tool-calling endpoint would inject a `<function=extract>` prefix that broke JSON parsing). Switched to `jsonMode` with the schema hardcoded into the system prompt directly, which has been reliable across every company tested.
+
+- **In-memory vector store, not a persistent vector DB** — Each research session is self-contained; there's no need to persist embeddings across users or sessions for this use case, so a persistent vector database (Pinecone, Weaviate) would be unnecessary infrastructure for what this actually needs to do.
+
+- **A pre-flight validity check before the main pipeline** — Without this, a nonsense input would still produce a confident-sounding Invest/Pass decision based on whatever noise Tavily returned. A small, fast classification call up front (rather than trying to catch this after the fact) prevented this cleanly.
+
+- **What I left out:** There's no persistent storage of past research sessions across browser sessions (Saved Reports / Recent Activity currently use `localStorage`, not a database) — this was a deliberate scope cut given the 7-day window, not an oversight.
+
+## Example runs
+
+**Qualcomm — Invest (94.2% confidence)**
+The agent identified Qualcomm's IP licensing model, diversified revenue streams, and semiconductor industry positioning as supporting points, while flagging trade policy/tariff exposure and industry cyclicality as risks.
+
+**Salesforce — Invest**
+Reasoning grounded in retrieved evidence around enterprise SaaS positioning and recurring revenue strength, balanced against competitive risk factors.
+
+**Paytm — Pass**
+The risk factors retrieved (regulatory and financial red flags specific to Paytm) outweighed the supporting evidence, resulting in a Pass decision.
+
+*(Additional run logs are available in `chat_logs.md`, which documents the actual build process including the debugging of edge cases like this.)*
+
+## What I would improve with more time
+
+1. **Persist reports to an actual database** instead of `localStorage`, so Saved Reports and Recent Activity survive across devices/sessions, not just the current browser.
+2. **Surface source citations** — right now the RAG-retrieved chunks inform the reasoning but aren't shown to the user directly; exposing which specific search result backed which claim would make the output more auditable.
+3. **Add a confidence calibration step** — the current confidence score comes directly from the LLM's own self-assessment, which isn't necessarily well-calibrated. A separate verification pass (or comparing against a held-out set of known outcomes) would make that number more trustworthy.
+4. **Handle Tavily rate limits / failures more gracefully** — currently a failed search call fails the whole pipeline rather than degrading gracefully with partial information.
 
 ---
-*Designed & Built by [Shubham Gupta](https://github.com/shubhamgupta407)*
+
+*Built by [Shubham Gupta](https://github.com/shubhamgupta407) · [LinkedIn](https://www.linkedin.com/in/shubhamgupta407)*
