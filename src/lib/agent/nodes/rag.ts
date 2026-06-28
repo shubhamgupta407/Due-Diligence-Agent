@@ -166,8 +166,19 @@ export async function ragNode(state: AgentStateType): Promise<Partial<AgentState
   const weakCategories = allCategories.filter(c => !strongCategories.has(c));
   const isLowConfidence = weakCategories.length >= 2;
 
+  // Calculate dynamic confidence score
+  const avgSimilarity = results.reduce((sum, r) => sum + ((r as any).score || 0), 0) / (results.length || 1);
+  const dataCompletenessRatio = strongCategories.size / 4;
+  
+  // Normalize the score to a 0-100 scale. Cosine similarities typically range from 0.2 to 0.7 here.
+  // We use a multiplier of 160 to scale a typical 0.6 average similarity up to ~96%.
+  let confidenceScore = Math.min(99.9, (avgSimilarity * 160) * dataCompletenessRatio);
+  confidenceScore = parseFloat(confidenceScore.toFixed(1));
+
   if (isLowConfidence) {
-    console.log(`[RAG Node] LOW CONFIDENCE WARNING. Weak categories: ${weakCategories.join(", ")}`);
+    console.log(`[RAG Node] LOW CONFIDENCE WARNING. Weak categories: ${weakCategories.join(", ")}. Score: ${confidenceScore}%`);
+  } else {
+    console.log(`[RAG Node] Confidence Score: ${confidenceScore}%`);
   }
 
   return {
@@ -175,6 +186,7 @@ export async function ragNode(state: AgentStateType): Promise<Partial<AgentState
     dataSufficiency: {
       isLowConfidence,
       weakCategories,
+      confidenceScore,
     }
   };
 }

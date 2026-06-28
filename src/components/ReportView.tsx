@@ -7,6 +7,7 @@ interface ReportProps {
 
 export function ReportView({ companyName, result }: ReportProps) {
   const isInvest = result.decision === "Invest";
+  const confidenceScore = result.dataSufficiency?.confidenceScore ?? 94.2;
 
   return (
     <div className="max-w-6xl mx-auto py-8 animate-in fade-in duration-500">
@@ -45,7 +46,7 @@ export function ReportView({ companyName, result }: ReportProps) {
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Confidence Score</p>
           <div className="text-3xl font-black font-mono text-gray-900 flex items-center justify-end gap-1">
             {isInvest ? <ArrowUpRight className="text-green-600" size={28} /> : <ArrowDownRight className="text-red-600" size={28} />}
-            94.2%
+            {confidenceScore.toFixed(1)}%
           </div>
         </div>
       </div>

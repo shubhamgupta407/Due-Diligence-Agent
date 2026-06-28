@@ -23,9 +23,10 @@ export const AgentState = Annotation.Root({
   dataSufficiency: Annotation<{
     isLowConfidence: boolean;
     weakCategories: string[];
+    confidenceScore: number;
   }>({
     reducer: (curr, next) => ({ ...curr, ...next }),
-    default: () => ({ isLowConfidence: false, weakCategories: [] }),
+    default: () => ({ isLowConfidence: false, weakCategories: [], confidenceScore: 0 }),
   }),
 
   // The final structured decision from the LLM.
@@ -37,6 +38,7 @@ export const AgentState = Annotation.Root({
     dataSufficiency?: {
       isLowConfidence: boolean;
       weakCategories: string[];
+      confidenceScore: number;
     };
   }>({
     reducer: (curr, next) => ({ ...curr, ...next }),
