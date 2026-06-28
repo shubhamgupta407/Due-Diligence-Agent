@@ -93,16 +93,18 @@ There's also a lightweight pre-flight check before any of this runs: a fast, low
 
 ## Example runs
 
-**Qualcomm — Invest (94.2% confidence)**
-Identified Qualcomm's IP licensing model, diversified revenue streams, and semiconductor industry positioning as supporting points, while flagging trade policy/tariff exposure and industry cyclicality as risks.
+**KSolves — Invest (68.4% confidence)**
+Evidence retrieved included a 16x increase in annual revenue since the company's stock market listing, 29.1% YoY growth in consolidated revenue, and 65.3% YoY growth in profit after tax. Risk factors included intense competition in IT services, cybersecurity exposure, dependence on a few large clients, and a notably high number of newly appointed, less experienced board directors — flagged directly from governance-related search results rather than a generic risk template.
 
-**Salesforce — Invest**
-Reasoning grounded in retrieved evidence around enterprise SaaS positioning and recurring revenue strength, balanced against competitive risk factors retrieved from recent news.
+**Nielsen — Invest (78.1% confidence)**
+Reasoning centered on Nielsen's recurring revenue model, global presence in media measurement, and diversified revenue streams, with the EBITDA-to-debt-leverage ratio specifically cited as evidence of financial resilience. Risk factors covered technological disruption, competition from other research firms, and regulatory exposure tied to industry standards.
 
-**Paytm — Pass**
-The risk factors retrieved (regulatory and financial red flags specific to Paytm) outweighed the supporting evidence retrieved, resulting in a Pass decision.
+**Intellipaat — Pass (80.2% confidence, flagged as declining)**
+This is the most interesting result in this set, and worth calling out directly rather than glossing over. The reasoning text explicitly states the retrieved research "does not offer a comprehensive view of Intellipaat's financial health, growth prospects, or competitive advantages" — a clearly low-confidence case. The system correctly detected this and applied a downward confidence adjustment (the UI shows a declining indicator alongside the score), but the resulting 80.2% is still higher than it should be for a result this thin on evidence. 
 
-*(The full build process — including catching and fixing the JSON parsing issue mentioned above — is documented in `chat_logs.md`.)*
+Digging into why: the confidence-penalty logic currently triggers based on categories returning *zero* chunks entirely. Intellipaat's research didn't hit that — it returned a small number of chunks spread thinly across categories rather than any single category coming back fully empty — so the full penalty didn't apply even though the result was genuinely low-confidence. This is a real gap I caught while preparing this section: the completeness check needs to weight "thin-but-present" data more aggressively, not just "zero chunks across categories." I've noted this as a known issue rather than fixing it post-submission, since I'd rather be upfront about a limitation I found through actual testing than present polished numbers that don't hold up under scrutiny.
+
+*(The full build process — including the Vercel-to-Render deployment switch, the chunk-size optimization for Render's free tier, and the confidence-score implementation and this specific gap in it — is documented in `chat_logs.md`.)*
 
 ## What I would improve with more time
 
