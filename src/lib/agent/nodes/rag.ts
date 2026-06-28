@@ -166,14 +166,26 @@ export async function ragNode(state: AgentStateType): Promise<Partial<AgentState
   const weakCategories = allCategories.filter(c => !strongCategories.has(c));
   const isLowConfidence = weakCategories.length >= 2;
 
-  // Calculate dynamic confidence score
-  const avgSimilarity = results.reduce((sum, r) => sum + ((r as any).score || 0), 0) / (results.length || 1);
-  const dataCompletenessRatio = strongCategories.size / 4;
+  // Calculate dynamic confidence score using a weighted multi-factor approach
+  // 1. Completeness (50% weight): Categories with at least one strong chunk
+  const completenessScore = (strongCategories.size / 4) * 50;
   
-  // Normalize the score to a 0-100 scale. Cosine similarities typically range from 0.2 to 0.7 here.
-  // We use a multiplier of 160 to scale a typical 0.6 average similarity up to ~96%.
-  let confidenceScore = Math.min(99.9, (avgSimilarity * 160) * dataCompletenessRatio);
-  confidenceScore = parseFloat(confidenceScore.toFixed(1));
+  // 2. Volume (15% weight): Total chunks retrieved (up to 10 is considered perfect volume)
+  const volumeScore = Math.min(1, results.length / 10) * 15;
+  
+  // 3. Similarity (35% weight): Average similarity normalized (0.2 -> 0%, 0.6 -> 100%)
+  const avgSimilarity = results.reduce((sum, r) => sum + ((r as any).score || 0), 0) / (results.length || 1);
+  const normalizedSim = Math.max(0, Math.min(1, (avgSimilarity - 0.15) / 0.45));
+  const similarityScore = normalizedSim * 35;
+  
+  let confidence = completenessScore + volumeScore + similarityScore;
+  
+  // Heavy penalty if flagged as low confidence to ensure UI signals agree
+  if (isLowConfidence) {
+    confidence = confidence * 0.7; 
+  }
+
+  let confidenceScore = parseFloat(Math.min(99.4, confidence).toFixed(1));
 
   if (isLowConfidence) {
     console.log(`[RAG Node] LOW CONFIDENCE WARNING. Weak categories: ${weakCategories.join(", ")}. Score: ${confidenceScore}%`);
