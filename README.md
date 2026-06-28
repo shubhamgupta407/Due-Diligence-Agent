@@ -65,6 +65,22 @@ There's also a lightweight pre-flight check before any of this runs: a fast, low
 
 - **Xenova Transformers.js over OpenAI embeddings** — Needed local, free embeddings rather than an external API call for every chunk. `all-MiniLM-L6-v2` via Xenova runs entirely in Node, no extra API cost or added network latency, and is the same model family I'd used with `sentence-transformers` in a previous Python project.
 
+ - **Render over Vercel for deployment** — Initially deployed on Vercel, but `@xenova/transformers` 
+  depends on ONNX Runtime's native binaries (.so files), which Vercel's serverless function 
+  bundling doesn't reliably include — this caused a `libonnxruntime.so` not found error in 
+  production despite working locally. Render's persistent server environment doesn't have this 
+  serverless-specific bundling constraint, so the same local-embeddings architecture works 
+  without modification.
+  
+- **Chunk size increased from 250 to ~450 words during deployment optimization** — After 
+  deploying to Render (chosen over Vercel due to a native binary compatibility issue explained 
+  below), logs showed each analysis was generating 55-67 chunks per company, and on Render's 
+  free tier (0.1 CPU), embedding all of those chunks was the main latency bottleneck — each 
+  analysis was taking 1-2 minutes. Increasing the chunk size to ~450 words roughly halved the 
+  chunk count, which directly reduced the embedding workload. I re-tested on companies already 
+  analyzed (Sprinto, KSolves) to confirm the larger chunks didn't degrade which signals got 
+  retrieved or the resulting Invest/Pass reasoning — the decisions and supporting evidence held up.
+
 - **Groq over OpenAI for synthesis** — Groq's inference speed meant the decision step added only a couple of seconds on top of the search and embedding latency, which matters when the user is already waiting through four web searches. The trade-off is somewhat less polished reasoning compared to GPT-4-class models, partially offset by moving from the 8B to the 70B model after the smaller model was inconsistent with strict JSON output (see below).
 
 - **`jsonMode` over native tool-calling for structured output** — Initially used Groq's tool-calling to force structured JSON, but it intermittently broke on certain companies — Groq's tool-calling endpoint would inject a `<function=extract>` prefix that broke JSON parsing downstream. Switched to `jsonMode` with the schema hardcoded directly into the system prompt, which has been reliable across every company tested since.
