@@ -92,10 +92,11 @@ export async function ragNode(state: AgentStateType): Promise<Partial<AgentState
   const { companyName, rawSearchResults } = state;
   console.log(`[RAG Node] Processing text for ${companyName}...`);
 
-  // We want to chunk the text to ~250 words. Using characters, ~1000 chars is ~200-250 words.
+  // We want to chunk the text to ~400-500 words to reduce total chunk count and speed up local embeddings.
+  // Using characters, ~2000 chars is ~400-500 words.
   const textSplitter = new RecursiveCharacterTextSplitter({
-    chunkSize: 1000,
-    chunkOverlap: 200, // Some overlap to retain context across chunks
+    chunkSize: 2000,
+    chunkOverlap: 400, // Some overlap to retain context across chunks
   });
 
   const allChunks: { pageContent: string; metadata: any }[] = [];
