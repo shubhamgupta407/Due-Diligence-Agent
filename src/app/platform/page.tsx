@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
 import { ReportView } from "@/components/ReportView";
-import { AlertCircle, FileText, Search, Loader2, CheckCircle2, Database, Globe, Brain, Briefcase, Newspaper, Users, ShieldAlert } from "lucide-react";
+import { AlertCircle, FileText, Search, Loader2, CheckCircle2, Database, Globe, Brain, Briefcase, Newspaper, Users, ShieldAlert, X } from "lucide-react";
 
 type BatchStatusData = {
   loading: boolean;
@@ -15,6 +15,7 @@ type BatchStatusData = {
 
 export default function AppDashboard() {
   const [activeTab, setActiveTab] = useState("new");
+  const [showColdStartNotice, setShowColdStartNotice] = useState(true);
   
   // Single Mode States
   const [companyName, setCompanyName] = useState("");
@@ -744,6 +745,24 @@ export default function AppDashboard() {
           {renderContent()}
         </main>
       </div>
+
+      {showColdStartNotice && (
+        <div className="fixed bottom-6 right-6 z-50 bg-blue-900 text-blue-50 p-4 rounded-xl shadow-2xl max-w-sm animate-in slide-in-from-bottom-5 fade-in duration-500 flex gap-3 items-start border border-blue-800">
+          <AlertCircle size={20} className="shrink-0 text-blue-300 mt-0.5" />
+          <div>
+            <h4 className="font-bold text-sm mb-1 text-white">Render Free Tier Host</h4>
+            <p className="text-xs text-blue-200 leading-relaxed">
+              This application is hosted on Render's free tier. Your very first search may take <strong>25-30 seconds</strong> to initialize due to a server cold start.
+            </p>
+          </div>
+          <button 
+            onClick={() => setShowColdStartNotice(false)}
+            className="text-blue-400 hover:text-white transition-colors p-1 -mt-1 -mr-1"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
