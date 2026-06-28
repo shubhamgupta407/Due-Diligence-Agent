@@ -2,7 +2,13 @@ import { AgentStateType } from "../state";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { Document } from "@langchain/core/documents";
 import { Embeddings } from "@langchain/core/embeddings";
-import { pipeline } from "@xenova/transformers";
+import { env, pipeline } from "@xenova/transformers";
+
+// Configure transformers for Node.js / Next.js environment
+// Prevent it from spawning web workers (which causes the blob:nodedata error)
+env.backends.onnx.wasm.numThreads = 1;
+// Disable local models to strictly use the remote HuggingFace Hub
+env.allowLocalModels = false;
 
 // Custom MemoryVectorStore to resolve module resolution issues
 class MemoryVectorStore {
