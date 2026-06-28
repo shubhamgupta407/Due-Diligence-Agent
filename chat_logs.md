@@ -146,6 +146,41 @@ honestly this part took the most iterations out of the whole project. kept rejec
 
 ---
 
+## Phase 6 — Performance Optimization & Deployment Polish
+
+**Me:** this one on the dashbaord page is too small and not in the proper place give it some better place got it
+*(referring to some UI sizing issues, we scaled the welcome screen down to make it feel more like an embedded app view instead of a generic landing page)*
+
+**Me:** a clear icon should be there..so that user can clear the existing company name by single clicl and type another name
+
+**AI:** Added an 'X' icon to the single asset search bar that instantly clears the query and refocuses the input, saving users from holding down backspace between searches.
+
+**Me:** The low-confidence warning banner is showing on every single search, even for companies with clearly rich data... This means the dataSufficiency check is broken. Please debug.
+
+**AI:** Found a subtle bug in the custom `MemoryVectorStore`. During the retrieval phase, it was instantiating fresh Langchain `Document` objects and accidentally stripping out the computed similarity scores. This caused the data sufficiency logic to always see a `0` score, failing the threshold check for every category. Fixed it to preserve the scores and added detailed logging to output chunk counts and scores per category to the terminal.
+
+**Me:** I'm getting this error when calling /api/research on my Vercel deployment... `Error: libonnxruntime.so.1.14.0: cannot open shared object file: No such file or directory`
+
+**AI:** Identified the root cause: Xenova Transformers.js relies on native ONNX runtime binaries (`.so` files on Linux). Vercel's Serverless environment strips out these native binaries during the build process, causing it to fail in production even when it works locally. Switched deployment strategy to Render, which runs a persistent Node server that doesn't strip native dependencies.
+
+**Me:** The RAG node currently creates ~55-67 chunks per company using RecursiveCharacterTextSplitter at ~250 words/chunk. On Render's free tier (0.1 CPU), generating embeddings for this many chunks is the main bottleneck... Can we increase chunk size to ~400-500 words to reduce total chunk count by roughly half?
+
+**AI:** Scaled the chunk size up to 2000 characters (roughly 400-500 words) with a 400-character overlap. This successfully cut the embedding workload in half, dropping the latency on Render's free tier from 2 minutes down to about 45-60 seconds, without heavily degrading retrieval quality.
+
+**Me:** on dashboard mention through a popup that this is render free tier so on first check due to cold start it takes 25-30 seconds
+
+**AI:** Added a dismissible slide-in toast to the bottom right of the UI warning users about the Render cold start delay. Later refined the copy to clarify the difference between the 25-30s initial cold start and the ongoing 1-2 minute latency caused by generating local embeddings on a 0.1 vCPU.
+
+**Me:** this notifivcation toggle is not working in genuine..it should not be vague and should be working actual..and abt the SR..it is also not fucntioin..noneed of making it duncitonal just change it to SG..shubhamGupta
+
+**AI:** Wired up the notification bell to hold real "unread" state, clearing the red dot when "Mark all read" is clicked, and updated the profile initials to SG.
+
+**Me:** The "Confidence Score" displayed in the UI is currently hardcoded/static — it shows 94.2% for every single company regardless of actual data quality... I need this to be a real, dynamically calculated metric instead.
+
+**AI:** Replaced the static UI value with a real algorithm in the RAG node. The score now factors in Data Completeness (50% weight), Average Similarity Score (35%), and Retrieval Volume (15%). If the RAG node triggers the "Low Confidence" flag (missing data in 2+ categories), it applies a heavy 30% penalty multiplier. This guarantees that companies with rich data hit 85-95% scores, while thin data profiles properly reflect scores in the 40-50% range, perfectly syncing the metric with the UI's warning banner.
+
+---
+
 ## What stands out looking back at this
 
 The UI iteration in Phase 3 took a lot more rounds than the backend did. Once the architecture was actually clear, the backend mostly worked within the first couple of passes. The UI took repeated rounds specifically because the default output kept defaulting back to recognizable "AI generated" patterns — centered hero, glowing gradient, vague buzzwords, generic process descriptions — and getting past that meant being specific about exactly what was wrong each time instead of just saying "make it better" and hoping. The edge case catch in Phase 4, rejecting garbage input before it reaches the pipeline, was something I found by actually trying to break the tool myself rather than something that came up during the regular build flow.
