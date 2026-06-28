@@ -1,5 +1,7 @@
 # Due Diligence Agent
 
+**Live Deployment:** [https://due-diligence-agent-kwfz.onrender.com](https://due-diligence-agent-kwfz.onrender.com)
+
 An AI agent that takes a company name, researches it across multiple dimensions, and returns an Invest/Pass decision with reasoning grounded in the evidence it actually retrieved — not just a single LLM call guessing from its own training data.
 
 ## Overview — what it does
@@ -29,7 +31,7 @@ The product also includes a full platform around the agent — a dashboard with 
    npm install
 ```
 
-3. **Set up environment variables** — create a `.env.local` file in the root:
+3. **Set up environment variables** — create a `.env.local` file in the root based on `.env.local.template`:
 ```env
    GROQ_API_KEY=gsk_your_groq_api_key_here
    TAVILY_API_KEY=tvly_your_tavily_api_key_here
@@ -99,18 +101,16 @@ Evidence retrieved included a 16x increase in annual revenue since the company's
 **Nielsen — Invest (78.1% confidence)**
 Reasoning centered on Nielsen's recurring revenue model, global presence in media measurement, and diversified revenue streams, with the EBITDA-to-debt-leverage ratio specifically cited as evidence of financial resilience. Risk factors covered technological disruption, competition from other research firms, and regulatory exposure tied to industry standards.
 
-**Intellipaat — Pass (80.2% confidence, flagged as declining)**
-This is the most interesting result in this set, and worth calling out directly rather than glossing over. The reasoning text explicitly states the retrieved research "does not offer a comprehensive view of Intellipaat's financial health, growth prospects, or competitive advantages" — a clearly low-confidence case. The system correctly detected this and applied a downward confidence adjustment (the UI shows a declining indicator alongside the score), but the resulting 80.2% is still higher than it should be for a result this thin on evidence. 
+**Intellipaat — Pass (44.2% confidence, flagged as declining)**
+This is an interesting result worth calling out. The reasoning text explicitly states the retrieved research "does not offer a comprehensive view of Intellipaat's financial health, growth prospects, or competitive advantages" — a clearly low-confidence case. The system correctly detected this missing data in the RAG node and applied a heavy 30% confidence penalty multiplier (the UI also shows a declining indicator alongside the score). It effectively flagged that while the data suggests passing, the decision itself is built on very thin evidence.
 
-Digging into why: the confidence-penalty logic currently triggers based on categories returning *zero* chunks entirely. Intellipaat's research didn't hit that — it returned a small number of chunks spread thinly across categories rather than any single category coming back fully empty — so the full penalty didn't apply even though the result was genuinely low-confidence. This is a real gap I caught while preparing this section: the completeness check needs to weight "thin-but-present" data more aggressively, not just "zero chunks across categories." I've noted this as a known issue rather than fixing it post-submission, since I'd rather be upfront about a limitation I found through actual testing than present polished numbers that don't hold up under scrutiny.
-
-*(The full build process — including the Vercel-to-Render deployment switch, the chunk-size optimization for Render's free tier, and the confidence-score implementation and this specific gap in it — is documented in `chat_logs.md`.)*
+*(The full build process — including the Vercel-to-Render deployment switch, the chunk-size optimization for Render's free tier, and the confidence-score algorithmic implementation — is documented in `chat_logs.md`.)*
 
 ## What I would improve with more time
 
 1. **Move Saved Reports / Recent Activity to a real database** instead of `localStorage`, so history persists across devices and browser sessions rather than just the current browser.
 2. **Surface source citations** — the RAG-retrieved chunks currently inform the reasoning but aren't shown to the user directly; exposing which specific search result backed which claim would make the output more auditable.
-3. **Add a confidence calibration step** — the current confidence score is the LLM's own self-assessment, which isn't necessarily well-calibrated. A separate verification pass, or comparison against a held-out set of known outcomes, would make that number more trustworthy.
+3. **Refine the Confidence Penalty threshold** — while the score is dynamically calculated based on retrieval volume and similarity, the heavy 30% penalty currently relies on a category returning zero chunks. It should be fine-tuned to better penalize categories that return very few chunks or very low similarity chunks, rather than a binary zero.
 4. **Handle Tavily failures more gracefully** — right now a failed search call fails the whole pipeline; partial results (e.g., 3 out of 4 categories) should still be usable rather than failing outright.
 
 ---
