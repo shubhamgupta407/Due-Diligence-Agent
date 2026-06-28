@@ -747,12 +747,15 @@ export default function AppDashboard() {
       </div>
 
       {showColdStartNotice && (
-        <div className="fixed bottom-6 right-6 z-50 bg-blue-900 text-blue-50 p-4 rounded-xl shadow-2xl max-w-sm animate-in slide-in-from-bottom-5 fade-in duration-500 flex gap-3 items-start border border-blue-800">
+        <div className="fixed bottom-6 right-6 z-50 bg-blue-900 text-blue-50 p-4 rounded-xl shadow-2xl max-w-sm lg:max-w-md animate-in slide-in-from-bottom-5 fade-in duration-500 flex gap-3 items-start border border-blue-800">
           <AlertCircle size={20} className="shrink-0 text-blue-300 mt-0.5" />
           <div>
             <h4 className="font-bold text-sm mb-1 text-white">Render Free Tier Host</h4>
+            <p className="text-xs text-blue-200 leading-relaxed mb-2">
+              This application is hosted on Render's free tier. The first search after a period of inactivity may take <strong>25-30 seconds</strong> for the server to wake up.
+            </p>
             <p className="text-xs text-blue-200 leading-relaxed">
-              This application is hosted on Render's free tier. Your very first search may take <strong>25-30 seconds</strong> to initialize due to a server cold start.
+              After that, each analysis still takes approximately <strong>1-2 minutes</strong> — this is because embeddings are generated locally (via Xenova Transformers.js) rather than through an external API, and Render's free tier provides very limited CPU (0.1 vCPU). This is a hosting-tier constraint, not an architectural issue — with dedicated compute, this pipeline runs in a few seconds.
             </p>
           </div>
           <button 
