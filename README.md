@@ -108,10 +108,10 @@ This is an interesting result worth calling out. The reasoning text explicitly s
 
 ## What I would improve with more time
 
-1. **Move Saved Reports / Recent Activity to a real database** instead of `localStorage`, so history persists across devices and browser sessions rather than just the current browser.
-2. **Surface source citations** — the RAG-retrieved chunks currently inform the reasoning but aren't shown to the user directly; exposing which specific search result backed which claim would make the output more auditable.
-3. **Refine the Confidence Penalty threshold** — while the score is dynamically calculated based on retrieval volume and similarity, the heavy 30% penalty currently relies on a category returning zero chunks. It should be fine-tuned to better penalize categories that return very few chunks or very low similarity chunks, rather than a binary zero.
-4. **Handle Tavily failures more gracefully** — right now a failed search call fails the whole pipeline; partial results (e.g., 3 out of 4 categories) should still be usable rather than failing outright.
+1. **Persistent State (Postgres):** Right now, the "Saved Reports" and "Recent Activity" just use browser `localStorage` to keep things lightweight for the assignment. If I had more time, I'd move this state to a real database (like Postgres via Prisma) so a user's research history actually syncs across devices.
+2. **Hard Citations in the UI:** The LLM bases its reasoning entirely on the RAG chunks, but the UI doesn't explicitly link back to the source URLs. I’d update the prompt to force exact citations (e.g., `[1]`, `[2]`) in the JSON output, and render those as clickable tooltips in the frontend so the analysis is 100% auditable.
+3. **Smarter Confidence Thresholds:** The algorithmic confidence score works well, but the heavy 30% penalty for "missing data" only triggers if a search category returns literally zero chunks. I'd fine-tune this so that returning, say, only 1 chunk with a terrible similarity score also triggers the penalty. It needs a continuous grading curve rather than a strict binary cut-off.
+4. **Fault-Tolerant Search Pipeline:** The `Promise.all` block for the four Tavily searches is fast, but it's brittle—if the "Competitors" search randomly times out, the whole pipeline fails. I'd switch this to `Promise.allSettled`, so if one category fails, the LLM just notes that the specific data was unavailable and proceeds to evaluate the company based on the other three categories anyway.
 
 ---
 
