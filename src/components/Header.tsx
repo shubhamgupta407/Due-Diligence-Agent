@@ -26,6 +26,7 @@ export function Header({
   onSubmit, loading 
 }: HeaderProps) {
   const [showNotifications, setShowNotifications] = useState(false);
+  const [hasUnread, setHasUnread] = useState(true);
 
   const handleAddBatchCompany = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -135,14 +136,19 @@ export function Header({
             onClick={() => setShowNotifications(!showNotifications)}
           >
             <Bell size={18} />
-            <span className="absolute top-0 right-0 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+            {hasUnread && <span className="absolute top-0 right-0 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />}
           </button>
 
           {showNotifications && (
             <div className="absolute right-0 mt-2 w-80 bg-white rounded-md shadow-lg py-2 border border-gray-200 z-50">
               <div className="px-4 py-2 border-b border-gray-100 flex justify-between items-center">
                 <h3 className="text-sm font-semibold text-gray-900">System Notifications</h3>
-                <span className="text-xs text-blue-600 cursor-pointer hover:underline">Mark all read</span>
+                <span 
+                  className="text-xs text-blue-600 cursor-pointer hover:underline"
+                  onClick={() => setHasUnread(false)}
+                >
+                  Mark all read
+                </span>
               </div>
               <div className="px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-50">
                 <div className="flex justify-between items-start mb-1">
@@ -154,8 +160,8 @@ export function Header({
             </div>
           )}
         </div>
-        <div className="w-8 h-8 rounded-full bg-blue-100 border border-blue-200 flex items-center justify-center text-blue-700 font-semibold text-sm cursor-pointer hover:bg-blue-200 transition-colors">
-          SR
+        <div className="w-8 h-8 rounded-full bg-blue-100 border border-blue-200 flex items-center justify-center text-blue-700 font-semibold text-sm cursor-pointer hover:bg-blue-200 transition-colors" title="Shubham Gupta">
+          SG
         </div>
       </div>
     </header>
